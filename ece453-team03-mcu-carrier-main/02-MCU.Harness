@@ -1,0 +1,3 @@
+EEPROM=RX,TX,SCL,SEL
+Haptic_Header=SCL,SDA,SEL_A,SEL_B,SEL_C
+LiDAR_Header=RX,TX

@@ -1,0 +1,3 @@
+[submodule "altium-parts"]
+	path = altium-parts
+	url = https://git.doit.wisc.edu/engr/ece/cmpe_courses/public/ece453/altium/ece453-student-altium-parts.git

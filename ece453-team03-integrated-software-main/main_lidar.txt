@@ -1,0 +1,196 @@
+#include "main.h"
+#include "cy_retarget_io.h"
+#include "cyhal_uart.h"
+#include <math.h>
+#include <string.h>
+
+#define CYBSP_DEBUG_UART_RX_    (P5_0)
+#define CYBSP_DEBUG_UART_TX_    (P5_1)
+#define CY_RETARGET_IO_BAUDRATE (115200)
+
+#define BAUD_RATE   460800
+#define RX_BUF_SIZE 128
+
+#define MAX_POINTS 3000  
+
+typedef struct {
+    float angle;
+    float dist;
+} point_t;
+
+static point_t buf[MAX_POINTS];
+static int buf_len = 0;
+
+static uint8_t hw_rxbuf[RX_BUF_SIZE];
+
+
+static void send_cmd2(cyhal_uart_t *uart, uint8_t c0, uint8_t c1)
+{
+    cyhal_uart_putc(uart, c0);
+    cyhal_uart_putc(uart, c1);
+}
+
+
+static void wait_scan_header(cyhal_uart_t *uart)
+{
+    uint8_t w[7];
+    int f = 0;
+
+    while (f < 7)
+        cyhal_uart_getc(uart, &w[f++], 200);
+
+    for (;;)
+    {
+        if (w[0]==0xA5 && w[1]==0x5A && w[2]==0x05 &&
+            w[3]==0x00 && w[4]==0x00 && w[5]==0x40 && w[6]==0x81)
+            return;
+
+        for (int i=0;i<6;i++)
+            w[i] = w[i+1];
+        cyhal_uart_getc(uart, &w[6], 200);
+    }
+}
+
+
+static inline int valid_frame(uint8_t d[])
+{
+    uint8_t S  = d[0] & 1;
+    uint8_t S1 = (d[0] >> 1) & 1;
+    uint8_t C = d[1] & 1;
+    return (((S ^ S1) & C)== 1);
+}
+
+
+
+static inline float parse_angle(uint8_t d[])
+{
+    uint16_t aq6 = ((uint16_t)d[2] << 7) | (d[1] >> 1);
+    return (aq6 / 64.0f);
+    // return fmodf(aq6 / 64.0f, 360.0f);
+}
+
+static inline float parse_dist_mm(uint8_t d[])
+{
+    uint16_t q2 = ((uint16_t)d[4] << 8) | d[3];
+    if (q2 == 0) return -1;
+    return q2 / 4.0f;
+}
+
+
+static void get_valid_frame(cyhal_uart_t *uart, uint8_t d[5])
+{
+    for (int i=0;i<5;i++)
+        cyhal_uart_getc(uart, &d[i], 200);
+
+    for (;;)
+    {
+        if (valid_frame(d))
+            return;
+
+        d[0] = d[1];
+        d[1] = d[2];
+        d[2] = d[3];
+        d[3] = d[4];
+
+        cyhal_uart_getc(uart, &d[4], 200);
+    }
+}
+
+
+static void collect_one_rotation(cyhal_uart_t *uart)
+{
+    uint8_t d[5];
+    buf_len = 0;
+
+    for (;;)
+    {
+        get_valid_frame(uart, d);
+        if ((d[0] & 1) == 1)
+            break;
+    }
+
+    float a = parse_angle(d);
+    float dist = parse_dist_mm(d);
+    if (dist >= 0)
+        buf[buf_len++] = (point_t){a, dist};
+
+    uint8_t last_s = 1;
+
+    for (;;)
+    {
+        get_valid_frame(uart, d);
+
+        uint8_t S = d[0] & 1;
+
+        if (S == 1 && last_s == 0)
+            return;
+
+        float a2 = parse_angle(d);
+        float d2 = parse_dist_mm(d);
+
+        if (d2 >= 0 && buf_len < MAX_POINTS)
+            buf[buf_len++] = (point_t){a2, d2};
+
+        last_s = S;
+    }
+}
+
+
+static void print_rotation(void)
+{
+    printf("===== FULL ROTATION (%d points) =====\n", buf_len);
+
+    for (int i = 0; i < buf_len; i++)
+        printf("%.2f deg  %.1f mm\n", buf[i].angle, buf[i].dist);
+
+    printf("===== END OF ROTATION =====\n\n");
+}
+
+
+//========================================================
+// main()
+//========================================================
+int main(void)
+{
+    cybsp_init();
+    __enable_irq();
+
+    cy_retarget_io_init(CYBSP_DEBUG_UART_TX_,
+                        CYBSP_DEBUG_UART_RX_,
+                        CY_RETARGET_IO_BAUDRATE);
+
+    cyhal_uart_t uart;
+    uint32_t actualbaud;
+
+    const cyhal_uart_cfg_t cfg = {
+        .data_bits = 8,
+        .stop_bits = 1,
+        .parity    = CYHAL_UART_PARITY_NONE,
+        .rx_buffer = hw_rxbuf,
+        .rx_buffer_size = RX_BUF_SIZE
+    };
+
+    cyhal_uart_init(&uart,
+                    CYBSP_DEBUG_UART_TX,
+                    CYBSP_DEBUG_UART_RX,
+                    NC, NC,
+                    NULL,
+                    &cfg);
+
+    cyhal_uart_set_baud(&uart, BAUD_RATE, &actualbaud);
+
+    printf("Starting SCAN...\n");
+
+    send_cmd2(&uart, 0xA5, 0x20);  
+    wait_scan_header(&uart);      
+
+    printf("SCAN header OK. Receiving frames...\n");
+
+    while (1)
+    {
+        collect_one_rotation(&uart);  
+        print_rotation();              
+    }
+
+    return 0;
+}

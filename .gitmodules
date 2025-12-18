@@ -1,9 +1,0 @@
-[submodule "ece453-team03-integrated-software"]
-	path = ece453-team03-integrated-software
-	url = https://git.doit.wisc.edu/engr/ece/cmpe_courses/students/ece453/2025-fall/team03/ece453-team03-integrated-software
-[submodule "ecee453-team03-mcu-carrier"]
-	path = ecee453-team03-mcu-carrier
-	url = https://git.doit.wisc.edu/engr/ece/cmpe_courses/students/ece453/2025-fall/team03/ece453-team03-mcu-carrier
-[submodule "ece453-team03-mcu-carrier"]
-	path = ece453-team03-mcu-carrier
-	url = https://git.doit.wisc.edu/engr/ece/cmpe_courses/students/ece453/2025-fall/team03/ece453-team03-mcu-carrier

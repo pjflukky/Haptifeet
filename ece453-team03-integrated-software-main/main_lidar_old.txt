@@ -1,0 +1,135 @@
+#include "main.h"
+#include "cy_retarget_io.h"
+#include "cyhal_uart.h"
+#include <math.h> // for fmodf()
+
+#define CYBSP_DEBUG_UART_RX_ (P5_0)
+#define CYBSP_DEBUG_UART_TX_ (P5_1)
+#define CY_RETARGET_IO_BAUDRATE (115200)
+
+#define DATA_BITS_8 8
+#define STOP_BITS_1 1
+#define BAUD_RATE 460800
+
+#define SCAN_START_RESP_SIZE 7
+#define SCAN_DATA_SIZE 5
+
+static void clear_buf(uint8_t *buf, int size)
+{
+    for (int i = 0; i < size; i++)
+        buf[i] = 0;
+}
+
+static void send_cmd2(cyhal_uart_t *uart, uint8_t c0, uint8_t c1)
+{
+    cyhal_uart_putc(uart, c0);
+    cyhal_uart_putc(uart, c1);
+}
+
+int main(void)
+{
+    cy_rslt_t result = cybsp_init();
+    CY_ASSERT(result == CY_RSLT_SUCCESS);
+    __enable_irq();
+
+    cy_retarget_io_init(CYBSP_DEBUG_UART_TX_, CYBSP_DEBUG_UART_RX_, CY_RETARGET_IO_BAUDRATE);
+
+    cyhal_uart_t uart;
+    uint32_t actualbaud;
+    uint8_t rx_buf[128];
+
+    const cyhal_uart_cfg_t uart_config =
+        {
+            .data_bits = DATA_BITS_8,
+            .stop_bits = STOP_BITS_1,
+            .parity = CYHAL_UART_PARITY_NONE,
+            .rx_buffer = rx_buf,
+            .rx_buffer_size = sizeof(rx_buf)};
+
+    cyhal_uart_init(&uart, CYBSP_DEBUG_UART_TX, CYBSP_DEBUG_UART_RX,
+                    NC, NC, NULL, &uart_config);
+
+    cyhal_uart_set_baud(&uart, BAUD_RATE, &actualbaud);
+
+    printf("\r\n========== RPLIDAR SCAN ONLY MODE ==========\r\n");
+
+    //====================================================================
+    // 1. 发送 SCAN 命令 A5 20 (send the SCAN command A5 20)
+    //====================================================================
+    printf("Sending SCAN command...\r\n");
+    send_cmd2(&uart, 0xA5, 0x20); // ★ 只发一次 (send only once)
+
+    uint8_t scan_start[SCAN_START_RESP_SIZE];
+    clear_buf(scan_start, SCAN_START_RESP_SIZE);
+
+    int idx = 0;
+
+    //------ 接收 7 字节 start response (receive 7-byte start response) ------
+    while (idx < SCAN_START_RESP_SIZE)
+    {
+        if (cyhal_uart_getc(&uart, &scan_start[idx], 300) == CY_RSLT_SUCCESS)
+        {
+            idx++;
+        }
+        // 超时不重发，继续等 (do not resend on timeout, keep waiting)
+    }
+
+    printf("SCAN start response: ");
+    for (int i = 0; i < 7; i++)
+        printf("%02X ", scan_start[i]);
+    printf("\r\n");
+
+    //------ 等到 SCAN 正确应答 (wait for correct SCAN response) ------
+    while (!(scan_start[0] == 0xA5 && scan_start[1] == 0x5A &&
+             scan_start[2] == 0x05 && scan_start[3] == 0x00 &&
+             scan_start[4] == 0x00 && scan_start[5] == 0x40 &&
+             scan_start[6] == 0x81))
+    {
+        printf("Waiting for correct SCAN header...\r\n");
+        for (int i = 0; i < 7; i++)
+            cyhal_uart_getc(&uart, &scan_start[i], 300);
+    }
+
+    printf("SCAN header OK. Start scanning!\r\n\n");
+    
+    //====================================================================
+    // 2. 循环读取点云（5 bytes/frame） (loop to read point cloud data, 5 bytes/frame)
+    //====================================================================
+    printf("========== Reading SCAN data ==========\r\n");
+
+    while (1)
+    {
+        uint8_t d[SCAN_DATA_SIZE];
+
+        for (int i = 0; i < SCAN_DATA_SIZE; i++)
+        {
+            cyhal_uart_getc(&uart, &d[i], 300);
+        }
+
+        uint8_t Sflag = d[0] & 0x01;
+        uint16_t angle_q6 = (d[2] << 8) | d[1]; // (d[2] << 7) | (d[1] >> 1)
+        uint16_t dist_q2 = (d[4] << 8) | d[3];
+
+        //-----------------------------
+        // 角度（保持 0～360°） (angle, keep within 0-360°)
+        //-----------------------------
+        float angle_deg = angle_q6 / 64.0f;
+        angle_deg = fmodf(angle_deg + 360.0f, 360.0f);
+
+        //-----------------------------
+        // 距离：米 (m) (distance: meters)
+        //-----------------------------
+        float dist_m = (dist_q2 / 4.0f) / 1000.0f;
+
+        //-----------------------------
+        // 输出 (print out)
+        //-----------------------------
+        printf("Angle=%7.2f deg   Dist=%6.3f m", angle_deg, dist_m);
+        if (Sflag)
+            printf("   <--- NEW CIRCLE");
+        printf("\r\n");
+        cyhal_system_delay_ms(1000);
+    }
+
+    return 0;
+}
