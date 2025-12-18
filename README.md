@@ -2,8 +2,6 @@
 
 A hands-free navigational aid for the visually impaired that uses haptic feedback to convey spatial awareness.
 
-![HaptiFeet Device](docs/images/device.jpg)
-
 ## Overview
 
 HaptiFeet is a wearable assistive device designed to help visually impaired individuals navigate their environment through haptic feedback. The system uses LiDAR sensing to detect nearby objects and provides intuitive vibration patterns through eight independently controlled haptic modules positioned around the user's waist.
